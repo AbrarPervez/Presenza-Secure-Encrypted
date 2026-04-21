@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="black">#FF000000</color>
+    <color name="white">#FFFFFFFF</color>
+    <color name="primary_dark">#0F2027</color>
+    <color name="accent_blue">#2C5364</color>
+    <color name="glass_white">#1AFFFFFF</color>
+    <color name="glass_white_heavy">#26FFFFFF</color>
+    <color name="glass_border">#33FFFFFF</color>
+    <color name="text_secondary">#B0FFFFFF</color>
+    <color name="success_green">#00E676</color> <!-- Vibrant Spring Green for better contrast on Cyan -->
+    <color name="secure_glow">#4000E676</color>
+</resources>
