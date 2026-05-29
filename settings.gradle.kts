@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Presenza- Secure & Encrypted"
+rootProject.name = "Presenza- Secure and Encrypted"
 include(":app")
