@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "124000586699",
+    "project_id": "presenza-andencrypted",
+    "storage_bucket": "presenza-andencrypted.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:124000586699:android:8a70e40061485a5dd4444e",
+        "android_client_info": {
+          "package_name": "com.example.presenza_secureencrypted"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyD6pFtoQnyH3TxFizv1keOocmIstmwKsn0"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

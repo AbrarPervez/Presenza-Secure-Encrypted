@@ -29,16 +29,20 @@ class AdminFragment : Fragment() {
         }
 
         binding.btnEnrollFace.setOnClickListener {
-            // In a real app, this would open a camera for enrollment
-            Toast.makeText(context, "Opening Face Enrollment Camera...", Toast.LENGTH_SHORT).show()
-            
-            // Reusing RecognitionFragment for demonstration of camera access
-            parentFragmentManager.beginTransaction()
-                .setCustomAnimations(android.R.anim.slide_in_left, android.R.anim.fade_out, android.R.anim.fade_in, android.R.anim.slide_out_right)
-                .replace(R.id.fragment_container, RecognitionFragment())
-                .addToBackStack(null)
-                .commit()
+            navigateToRegister()
         }
+
+        binding.cvAddStudent.setOnClickListener {
+            navigateToRegister()
+        }
+    }
+
+    private fun navigateToRegister() {
+        parentFragmentManager.beginTransaction()
+            .setCustomAnimations(android.R.anim.slide_in_left, android.R.anim.fade_out, android.R.anim.fade_in, android.R.anim.slide_out_right)
+            .replace(R.id.fragment_container, RegisterStudentFragment())
+            .addToBackStack(null)
+            .commit()
     }
 
     override fun onDestroyView() {
