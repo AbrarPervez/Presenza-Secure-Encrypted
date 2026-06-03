@@ -1,15 +1,9 @@
 package com.example.presenza_secureencrypted
 
 import android.Manifest
-import android.content.Intent
-import android.graphics.Bitmap
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import android.util.Log
 import android.view.LayoutInflater
 import android.view.View
@@ -25,10 +19,12 @@ import com.example.presenza_secureencrypted.databinding.FragmentRecognitionBindi
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.face.FaceDetection
 import com.google.mlkit.vision.face.FaceDetectorOptions
-import com.google.mediapipe.tasks.vision.facelandmarker.FaceLandmarkerResult
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import kotlin.random.Random
 
 class RecognitionFragment : Fragment() {
     private var _binding: FragmentRecognitionBinding? = null
@@ -36,28 +32,25 @@ class RecognitionFragment : Fragment() {
 
     private var imageCapture: ImageCapture? = null
     private var imageAnalyzer: ImageAnalysis? = null
+    private var cameraProvider: ProcessCameraProvider? = null
     private lateinit var cameraExecutor: ExecutorService
 
-    private var speechRecognizer: SpeechRecognizer? = null
-    private var currentCode: String = ""
-    private var isCodeSpoken: Boolean = false
-    private var isAutoCapturing: Boolean = false
-
+    private lateinit var audioAnalyzer: AudioAnalyzer
+    private lateinit var lipSyncDetector: LipSyncDetector
     private lateinit var faceNetModel: FaceNetModel
+    private lateinit var database: AppDatabase
     private lateinit var firebaseManager: FirebaseManager
+
+    private var isLivenessVerified = false
+    private var isProcessing = false
+    private var verificationCode: String = ""
+    private var smoothedScore = 0f
+
     private val faceDetector = FaceDetection.getClient(
         FaceDetectorOptions.Builder()
             .setPerformanceMode(FaceDetectorOptions.PERFORMANCE_MODE_FAST)
             .build()
     )
-
-    private val handler = Handler(Looper.getMainLooper())
-    private val codeRunnable = object : Runnable {
-        override fun run() {
-            updateVerificationCode()
-            handler.postDelayed(this, 10000)
-        }
-    }
 
     private val requestPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestMultiplePermissions()
@@ -65,213 +58,126 @@ class RecognitionFragment : Fragment() {
         if (permissions[Manifest.permission.CAMERA] == true && 
             permissions[Manifest.permission.RECORD_AUDIO] == true) {
             startCamera()
-            startSpeechRecognition()
+            audioAnalyzer.start()
         } else {
-            Toast.makeText(context, "Permissions not granted.", Toast.LENGTH_SHORT).show()
-            parentFragmentManager.popBackStack()
+            Toast.makeText(context, "Permissions required", Toast.LENGTH_SHORT).show()
+            parentFragmentManager?.popBackStack()
         }
     }
 
-    override fun onCreateView(
-        inflater: LayoutInflater,
-        container: ViewGroup?,
-        savedInstanceState: Bundle?
-    ): View {
+    override fun onCreateView(inflater: LayoutInflater, container: ViewGroup?, savedInstanceState: Bundle?): View {
         _binding = FragmentRecognitionBinding.inflate(inflater, container, false)
         return binding.root
     }
 
+    private var isEnrollmentMode = false
+    private var rollNo: String? = null
+    private var firstName: String? = null
+    private var lastName: String? = null
+    private var section: String? = null
+
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
         super.onViewCreated(view, savedInstanceState)
 
-        if (allPermissionsGranted()) {
-            startCamera()
-            startSpeechRecognition()
-        } else {
-            requestPermissionLauncher.launch(
-                arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO)
-            )
-        }
-
-        binding.imageCaptureButton.setOnClickListener { takePhoto() }
-        binding.btnBack.setOnClickListener { parentFragmentManager.popBackStack() }
-
-        if (arguments?.getBoolean("IS_ENROLLMENT") == true) {
-            binding.tvInstruction.text = "Enrolling: ${arguments?.getString("FIRST_NAME")}"
+        arguments?.let {
+            isEnrollmentMode = it.getBoolean("IS_ENROLLMENT", false)
+            rollNo = it.getString("ROLL_NO")
+            firstName = it.getString("FIRST_NAME")
+            lastName = it.getString("LAST_NAME")
+            section = it.getString("SECTION")
         }
 
         faceNetModel = FaceNetModel(requireContext())
+        database = AppDatabase.getDatabase(requireContext())
         firebaseManager = FirebaseManager()
-        
-        cameraExecutor = Executors.newSingleThreadExecutor()
-        startCodeFlashing()
-    }
+        lipSyncDetector = LipSyncDetector()
+        audioAnalyzer = AudioAnalyzer { _ -> }
 
-    private fun startCodeFlashing() {
-        handler.post(codeRunnable)
-    }
+        generateVerificationCode()
 
-    private fun updateVerificationCode() {
-        val chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        currentCode = (1..6)
-            .map { chars.random() }
-            .joinToString("")
-        binding.tvVerificationCode.text = "CODE: $currentCode"
-        isCodeSpoken = false // Reset for new code
-    }
-
-    private fun startSpeechRecognition() {
-        if (!SpeechRecognizer.isRecognitionAvailable(requireContext())) {
-            Toast.makeText(context, "Speech recognition not available", Toast.LENGTH_SHORT).show()
-            return
-        }
-
-        speechRecognizer = SpeechRecognizer.createSpeechRecognizer(requireContext())
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
-        }
-
-        speechRecognizer?.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsdB: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {
-                // Restart listening on error (like timeout)
-                if (error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT) {
-                    speechRecognizer?.startListening(intent)
-                }
-            }
-
-            override fun onResults(results: Bundle?) {
-                val matches = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                matches?.forEach { match ->
-                    if (match.replace(" ", "").contains(currentCode, ignoreCase = true)) {
-                        isCodeSpoken = true
-                        Log.d(TAG, "Code matched: $match")
-                    }
-                }
-                // Keep listening
-                speechRecognizer?.startListening(intent)
-            }
-
-            override fun onPartialResults(partialResults: Bundle?) {
-                val matches = partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
-                matches?.forEach { match ->
-                    if (match.replace(" ", "").contains(currentCode, ignoreCase = true)) {
-                        isCodeSpoken = true
-                        Log.d(TAG, "Code matched (partial): $match")
-                    }
-                }
-            }
-
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-
-        speechRecognizer?.startListening(intent)
-    }
-
-    private var marHistory = mutableListOf<Float>()
-    private var hasBlinked = false
-    
-    private fun updateAnalysisUI(mar: Float, isBlinking: Boolean, faceCount: Int) {
-        if (faceCount > 1) {
-            binding.tvAntiSpoofing.text = "Error: Multiple faces detected!"
-            binding.tvAntiSpoofing.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_red_dark))
-            return // Stop further processing
-        } else if (faceCount == 0) {
-            binding.tvAntiSpoofing.text = "Align face within the frame"
-            binding.tvAntiSpoofing.setTextColor(ContextCompat.getColor(requireContext(), R.color.white))
-            return
-        }
-
-        if (isBlinking) hasBlinked = true
-        
-        marHistory.add(mar)
-        if (marHistory.size > 10) marHistory.removeAt(0)
-        
-        val isMoving = (marHistory.maxOrNull() ?: 0f) - (marHistory.minOrNull() ?: 0f) > 0.05f
-        
-        val statusText = StringBuilder()
-        if (isMoving) statusText.append("Liveness: Movement Detected")
-        else statusText.append("Liveness: Please speak the code")
-        
-        if (hasBlinked) statusText.append(" | Blink OK")
-        else statusText.append(" | Please blink")
-
-        if (isCodeSpoken) statusText.append(" | Code OK")
-        else statusText.append(" | Speak Code")
-
-        binding.tvAntiSpoofing.text = statusText.toString()
-        
-        if (isMoving && hasBlinked && isCodeSpoken) {
-            binding.tvAntiSpoofing.setTextColor(ContextCompat.getColor(requireContext(), R.color.success_green))
-            if (!isAutoCapturing) {
-                isAutoCapturing = true
-                Toast.makeText(context, "Liveness Verified! Capturing...", Toast.LENGTH_SHORT).show()
-                handler.postDelayed({ takePhoto() }, 500) // Small delay for UI to update
-            }
+        if (allPermissionsGranted()) {
+            startCamera()
+            audioAnalyzer.start()
         } else {
-            binding.tvAntiSpoofing.setTextColor(ContextCompat.getColor(requireContext(), android.R.color.holo_orange_light))
+            requestPermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
         }
+
+        binding.imageCaptureButton.setOnClickListener { if (!isProcessing) takePhoto() }
+        binding.btnBack.setOnClickListener { parentFragmentManager?.popBackStack() }
+        binding.tvVerificationCode.setOnClickListener { generateVerificationCode() }
+
+        cameraExecutor = Executors.newFixedThreadPool(2)
+    }
+
+    private fun generateVerificationCode() {
+        verificationCode = Random.nextInt(1000, 10000).toString()
+        binding.tvVerificationCode.text = "CODE: $verificationCode"
     }
 
     private fun startCamera() {
         val cameraProviderFuture = ProcessCameraProvider.getInstance(requireContext())
-
         cameraProviderFuture.addListener({
-            val cameraProvider: ProcessCameraProvider = cameraProviderFuture.get()
-
-            val preview = Preview.Builder()
-                .build()
-                .also {
-                    it.setSurfaceProvider(binding.viewFinder.surfaceProvider)
-                }
-
+            cameraProvider = cameraProviderFuture.get()
+            val preview = Preview.Builder().build().also { it.setSurfaceProvider(binding.viewFinder.surfaceProvider) }
             imageCapture = ImageCapture.Builder().build()
-
             imageAnalyzer = ImageAnalysis.Builder()
                 .setBackpressureStrategy(ImageAnalysis.STRATEGY_KEEP_ONLY_LATEST)
-                .setOutputImageFormat(ImageAnalysis.OUTPUT_IMAGE_FORMAT_RGBA_8888)
+                .setOutputImageRotationEnabled(true)
                 .build()
                 .also {
-                    it.setAnalyzer(cameraExecutor, FaceAnalyzer(requireContext()) { result, mar, isBlinking, faceCount ->
-                        activity?.runOnUiThread {
-                            updateAnalysisUI(mar, isBlinking, faceCount)
+                    it.setAnalyzer(cameraExecutor, FaceAnalyzer(requireContext()) { _, mar, _, _ ->
+                        if (!isProcessing && !isLivenessVerified) {
+                            val currentAmp = audioAnalyzer.currentAmplitude
+                            activity?.runOnUiThread { processLiveness(mar, currentAmp) }
                         }
                     })
                 }
-
-            val cameraSelector = CameraSelector.DEFAULT_FRONT_CAMERA
-
             try {
-                cameraProvider.unbindAll()
-                cameraProvider.bindToLifecycle(
-                    this, cameraSelector, preview, imageCapture, imageAnalyzer
-                )
-            } catch (exc: Exception) {
-                Log.e(TAG, "Use case binding failed", exc)
-            }
-
+                cameraProvider?.unbindAll()
+                cameraProvider?.bindToLifecycle(this, CameraSelector.DEFAULT_FRONT_CAMERA, preview, imageCapture, imageAnalyzer)
+            } catch (exc: Exception) { Log.e(TAG, "Binding failed", exc) }
         }, ContextCompat.getMainExecutor(requireContext()))
     }
 
-    private fun takePhoto() {
-        val imageCapture = imageCapture ?: return
+    private fun processLiveness(mar: Float, amplitude: Float) {
+        if (isProcessing) return
+        lipSyncDetector.addData(mar, amplitude)
 
+        val bestCorr = lipSyncDetector.getBestCorrelation()
+        smoothedScore = (smoothedScore * 0.8f) + (bestCorr * 0.2f) // More smoothing to reduce "twitchiness"
+        
+        val status = lipSyncDetector.getSignalStatus()
+        
+        if (lipSyncDetector.isLipSyncValid(bestCorr) && !isLivenessVerified) {
+            isLivenessVerified = true
+            isProcessing = true
+            binding.tvAntiSpoofing.text = "Liveness Verified!"
+            binding.tvAntiSpoofing.setTextColor(ContextCompat.getColor(requireContext(), R.color.success_green))
+            takePhoto()
+        } else if (!isLivenessVerified) {
+            binding.tvInstruction.text = when(status) {
+                1 -> "Speak Louder"
+                2 -> "Move mouth more clearly"
+                else -> "Say the code: $verificationCode"
+            }
+            binding.tvAntiSpoofing.text = "Anti-Spoofing: ${maxOf(0, (smoothedScore * 100).toInt())}%"
+        }
+    }
+
+    private fun takePhoto() {
+        binding.imageCaptureButton.isEnabled = false
+        binding.imageCaptureButton.alpha = 0.5f
+        isProcessing = true
+
+        val imageCapture = imageCapture ?: return
         imageCapture.takePicture(
             ContextCompat.getMainExecutor(requireContext()),
             object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
+                    cameraProvider?.unbindAll()
                     processCapturedImage(image)
                 }
-
-                override fun onError(exc: ImageCaptureException) {
-                    Log.e(TAG, "Photo capture failed: ${exc.message}", exc)
-                    isAutoCapturing = false // Allow retry
-                }
+                override fun onError(exc: ImageCaptureException) { resetState() }
             }
         )
     }
@@ -279,118 +185,91 @@ class RecognitionFragment : Fragment() {
     private fun processCapturedImage(image: ImageProxy) {
         val bitmap = image.toBitmap()
         val rotation = image.imageInfo.rotationDegrees
-        val inputImage = InputImage.fromBitmap(bitmap, rotation)
-
-        faceDetector.process(inputImage)
+        faceDetector.process(InputImage.fromBitmap(bitmap, rotation))
             .addOnSuccessListener { faces ->
                 if (faces.isNotEmpty()) {
-                    val face = faces[0]
-                    val boundingBox = face.boundingBox
-                    
-                    // Ensure bounding box is within bitmap bounds
-                    val left = maxOf(0, boundingBox.left)
-                    val top = maxOf(0, boundingBox.top)
-                    val width = minOf(bitmap.width - left, boundingBox.width())
-                    val height = minOf(bitmap.height - top, boundingBox.height())
-                    
-                    val faceBitmap = Bitmap.createBitmap(bitmap, left, top, width, height)
-                    
-                    if (arguments?.getBoolean("IS_ENROLLMENT") == true) {
-                        enrollFace(faceBitmap)
-                    } else {
-                        verifyIdentity(faceBitmap)
-                    }
+                    val box = faces[0].boundingBox
+                    val left = maxOf(0, box.left)
+                    val top = maxOf(0, box.top)
+                    val faceBitmap = Bitmap.createBitmap(bitmap, left, top, minOf(bitmap.width - left, box.width()), minOf(bitmap.height - top, box.height()))
+                    if (isEnrollmentMode) enrollUser(faceBitmap) else verifyIdentity(faceBitmap)
                 } else {
-                    Toast.makeText(context, "No face detected in capture", Toast.LENGTH_SHORT).show()
-                    isAutoCapturing = false
+                    Toast.makeText(context, "No face detected", Toast.LENGTH_SHORT).show()
+                    resetState()
                 }
                 image.close()
             }
-            .addOnFailureListener {
-                Log.e(TAG, "Face detection failed", it)
-                image.close()
-                isAutoCapturing = false
-            }
+            .addOnFailureListener { image.close(); resetState() }
     }
 
-    private fun enrollFace(faceBitmap: Bitmap) {
-        val embedding = faceNetModel.getFaceEmbedding(faceBitmap)
-        val rollNo = arguments?.getString("ROLL_NO") ?: ""
-        val firstName = arguments?.getString("FIRST_NAME") ?: ""
-        val lastName = arguments?.getString("LAST_NAME") ?: ""
-        val section = arguments?.getString("SECTION") ?: ""
+    private fun resetState() {
+        isProcessing = false
+        isLivenessVerified = false
+        binding.imageCaptureButton.isEnabled = true
+        binding.imageCaptureButton.alpha = 1.0f
+        smoothedScore = 0f
+        startCamera()
+    }
 
+    private fun enrollUser(faceBitmap: Bitmap) {
+        val embedding = faceNetModel.getFaceEmbedding(faceBitmap)
         lifecycleScope.launch {
-            val result = firebaseManager.enrollStudent(
-                rollNo, firstName, lastName, section, embedding.toList()
-            )
-            result.onSuccess {
-                Toast.makeText(context, "Student Enrolled Successfully!", Toast.LENGTH_LONG).show()
-                // Pop twice to go back to Admin console
-                parentFragmentManager.popBackStack()
-                parentFragmentManager.popBackStack()
-            }.onFailure {
-                Toast.makeText(context, "Enrollment Failed: ${it.message}", Toast.LENGTH_SHORT).show()
-                isAutoCapturing = false
-            }
+            try {
+                val user = User(rollNo = rollNo ?: "", name = "$firstName $lastName", section = section ?: "", embedding = embedding)
+                withContext(Dispatchers.IO) { database.userDao().insert(user) }
+                firebaseManager.enrollStudent(rollNo ?: "", firstName ?: "", lastName ?: "", section ?: "", embedding.toList())
+                shutdownAndExit("Enrollment Successful")
+            } catch (e: Exception) { resetState() }
         }
     }
 
     private fun verifyIdentity(faceBitmap: Bitmap) {
         val currentEmbedding = faceNetModel.getFaceEmbedding(faceBitmap)
-        
         lifecycleScope.launch {
-            val result = firebaseManager.getAllStudents()
-            result.onSuccess { students ->
-                var bestMatchName = ""
-                var bestMatchRollNo = ""
-                var maxSimilarity = 0f
-
-                for (student in students) {
-                    val storedEmbedding = student["face_embedding"] as? List<*>
-                    if (storedEmbedding != null) {
-                        val floatArray = storedEmbedding.map { (it as Number).toFloat() }.toFloatArray()
-                        val similarity = faceNetModel.cosineSimilarity(currentEmbedding, floatArray)
-                        
-                        if (similarity > maxSimilarity) {
-                            maxSimilarity = similarity
-                            bestMatchName = "${student["firstName"]} ${student["lastName"]}"
-                            bestMatchRollNo = student["rollNo"] as? String ?: ""
-                        }
-                    }
-                }
-
-                if (maxSimilarity > 0.7f) { // Identity verified
-                    firebaseManager.recordAttendance(bestMatchRollNo, bestMatchName, "Present")
-                    Toast.makeText(context, "Verified: $bestMatchName", Toast.LENGTH_LONG).show()
-                    parentFragmentManager.popBackStack()
+            val users = withContext(Dispatchers.IO) { database.userDao().getAll() }
+            var bestMatch: User? = null
+            var maxSim = 0f
+            for (u in users) {
+                val sim = faceNetModel.cosineSimilarity(currentEmbedding, u.embedding)
+                if (sim > maxSim) { maxSim = sim; bestMatch = u }
+            }
+            
+            if (maxSim > 0.75f && bestMatch != null) {
+                // TOGGLE ATTENDANCE: Add if missing, Remove if already present today
+                val result = firebaseManager.toggleAttendance(bestMatch.rollNo, bestMatch.name)
+                val message = if (result.getOrDefault(true)) {
+                    "Welcome ${bestMatch.name}! Attendance Recorded."
                 } else {
-                    Toast.makeText(context, "Identity Verification Failed: No Match Found", Toast.LENGTH_LONG).show()
-                    isAutoCapturing = false
+                    "Attendance Removed for ${bestMatch.name}."
                 }
-            }.onFailure {
-                Toast.makeText(context, "Error fetching data: ${it.message}", Toast.LENGTH_SHORT).show()
-                isAutoCapturing = false
+                shutdownAndExit(message)
+            } else {
+                Toast.makeText(context, "Identity Verification Failed", Toast.LENGTH_SHORT).show()
+                resetState()
             }
         }
     }
 
-    private fun allPermissionsGranted() = ContextCompat.checkSelfPermission(
-        requireContext(), Manifest.permission.CAMERA
-    ) == PackageManager.PERMISSION_GRANTED && ContextCompat.checkSelfPermission(
-        requireContext(), Manifest.permission.RECORD_AUDIO
-    ) == PackageManager.PERMISSION_GRANTED
+    private fun shutdownAndExit(message: String) {
+        activity?.runOnUiThread {
+            cameraProvider?.unbindAll()
+            audioAnalyzer.stop()
+            Toast.makeText(requireContext(), message, Toast.LENGTH_LONG).show()
+            parentFragmentManager?.popBackStackImmediate()
+        }
+    }
+
+    private fun allPermissionsGranted() = arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO).all {
+        ContextCompat.checkSelfPermission(requireContext(), it) == PackageManager.PERMISSION_GRANTED
+    }
 
     override fun onDestroyView() {
         super.onDestroyView()
-        handler.removeCallbacks(codeRunnable)
-        speechRecognizer?.destroy()
+        audioAnalyzer.stop()
         faceNetModel.close()
         cameraExecutor.shutdown()
         _binding = null
     }
 
-    companion object {
-        private const val TAG = "RecognitionFragment"
-    }
+    companion object { private const val TAG = "RecognitionFragment" }
 }

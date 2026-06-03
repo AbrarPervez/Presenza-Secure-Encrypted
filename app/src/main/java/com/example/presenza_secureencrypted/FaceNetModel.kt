@@ -67,24 +67,30 @@ class FaceNetModel(context: Context) {
     }
 
     fun cosineSimilarity(e1: FloatArray, e2: FloatArray): Float {
-        var dotProduct = 0f
-        var normA = 0f
-        var normB = 0f
-
-        for (i in e1.indices) {
-            dotProduct += e1[i] * e2[i]
-            normA += e1[i] * e1[i]
-            normB += e2[i] * e2[i]
-        }
-
-        return (
-                dotProduct /
-                        (Math.sqrt(normA.toDouble()).toFloat() *
-                                Math.sqrt(normB.toDouble()).toFloat())
-                )
+        return calculateCosineSimilarity(e1, e2)
     }
 
     fun close() {
         interpreter.close()
+    }
+
+    companion object {
+        fun calculateCosineSimilarity(e1: FloatArray, e2: FloatArray): Float {
+            var dotProduct = 0f
+            var normA = 0f
+            var normB = 0f
+
+            for (i in e1.indices) {
+                dotProduct += e1[i] * e2[i]
+                normA += e1[i] * e1[i]
+                normB += e2[i] * e2[i]
+            }
+
+            return (
+                    dotProduct /
+                            (Math.sqrt(normA.toDouble()).toFloat() *
+                                    Math.sqrt(normB.toDouble()).toFloat())
+                    )
+        }
     }
 }

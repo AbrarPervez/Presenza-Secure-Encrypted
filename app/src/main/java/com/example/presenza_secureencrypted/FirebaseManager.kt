@@ -4,6 +4,7 @@ import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.SetOptions
 import kotlinx.coroutines.tasks.await
+import java.util.Calendar
 
 class FirebaseManager {
     private val db = FirebaseFirestore.getInstance()
@@ -11,7 +12,6 @@ class FirebaseManager {
 
     /**
      * Saves the face embedding for the currently logged-in user.
-     * @param embedding A list of floats representing the face features.
      */
     suspend fun saveUserEmbedding(embedding: List<Float>): Result<Unit> {
         val userId = auth.currentUser?.uid ?: return Result.failure(Exception("User not logged in"))
@@ -46,7 +46,6 @@ class FirebaseManager {
                 "face_embedding" to embedding,
                 "enrolledAt" to com.google.firebase.Timestamp.now()
             )
-            // Use rollNo as the document ID for easy lookup
             db.collection("students").document(rollNo)
                 .set(studentData)
                 .await()
@@ -57,46 +56,52 @@ class FirebaseManager {
     }
 
     /**
-     * Retrieves a student's embedding by their Roll Number.
+     * Toggles attendance: If already recorded today, removes it. If not, records it.
+     * Returns true if attendance was recorded, false if it was removed.
      */
-    suspend fun getStudentEmbedding(rollNo: String): Result<List<Float>?> {
+    suspend fun toggleAttendance(rollNo: String, name: String): Result<Boolean> {
         return try {
-            val document = db.collection("students").document(rollNo).get().await()
-            val embedding = document.get("face_embedding") as? List<*>
-            val floatEmbedding = embedding?.map { (it as Number).toFloat() }
-            Result.success(floatEmbedding)
+            val today = Calendar.getInstance().apply {
+                set(Calendar.HOUR_OF_DAY, 0)
+                set(Calendar.MINUTE, 0)
+                set(Calendar.SECOND, 0)
+                set(Calendar.MILLISECOND, 0)
+            }.time
+
+            val snapshot = db.collection("attendance")
+                .whereEqualTo("rollNo", rollNo)
+                .whereGreaterThanOrEqualTo("timestamp", today)
+                .get()
+                .await()
+
+            if (!snapshot.isEmpty) {
+                // Already recorded today, remove entries
+                for (doc in snapshot.documents) {
+                    db.collection("attendance").document(doc.id).delete().await()
+                }
+                Result.success(false) // Removed
+            } else {
+                // Not recorded yet, add entry
+                val entry = hashMapOf(
+                    "rollNo" to rollNo,
+                    "name" to name,
+                    "timestamp" to com.google.firebase.Timestamp.now(),
+                    "status" to "Present",
+                    "verified_via" to "FaceRecognition_Liveness"
+                )
+                db.collection("attendance").add(entry).await()
+                Result.success(true) // Added
+            }
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
-    /**
-     * Retrieves all enrolled students.
-     */
     suspend fun getAllStudents(): Result<List<Map<String, Any>>> {
         return try {
             val snapshot = db.collection("students").get().await()
             val students = snapshot.documents.mapNotNull { it.data?.plus("id" to it.id) }
             Result.success(students)
-        } catch (e: Exception) {
-            Result.failure(e)
-        }
-    }
-
-    /**
-     * Records an attendance entry after successful verification.
-     */
-    suspend fun recordAttendance(rollNo: String, name: String, status: String): Result<Unit> {
-        return try {
-            val entry = hashMapOf(
-                "rollNo" to rollNo,
-                "name" to name,
-                "timestamp" to com.google.firebase.Timestamp.now(),
-                "status" to status,
-                "verified_via" to "FaceRecognition_Liveness"
-            )
-            db.collection("attendance").add(entry).await()
-            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }

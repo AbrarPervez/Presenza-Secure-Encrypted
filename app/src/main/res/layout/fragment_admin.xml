@@ -133,9 +133,10 @@
                     android:background="@color/glass_border" />
 
                 <TextView
+                    android:id="@+id/tvTotalStudents"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
-                    android:text="Total Enrolled Students: 42"
+                    android:text="Total Enrolled Students: 0"
                     android:textColor="@color/text_secondary"
                     android:textSize="14sp" />
 
@@ -143,9 +144,23 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="4dp"
-                    android:text="Last Backup: 2 hours ago"
+                    android:text="Data is stored securely on-device."
                     android:textColor="@color/text_secondary"
                     android:textSize="14sp" />
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btnManageStudents"
+                    android:layout_width="match_parent"
+                    android:layout_height="60dp"
+                    android:layout_marginTop="16dp"
+                    android:backgroundTint="@color/glass_white_heavy"
+                    android:text="Manage / Delete Students"
+                    android:textAllCaps="false"
+                    android:textColor="@color/white"
+                    android:textSize="14sp"
+                    app:cornerRadius="12dp"
+                    app:strokeColor="@color/glass_border"
+                    app:strokeWidth="1dp" />
 
             </LinearLayout>
         </androidx.cardview.widget.CardView>
