@@ -1,0 +1,71 @@
+class LipSyncActivity : AppCompatActivity(), TextToSpeech.OnInitListener {
+
+    private lateinit var tts: TextToSpeech
+    private lateinit var mouthImage: ImageView
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        setContentView(R.layout.activity_main)
+
+        mouthImage = findViewById(R.id.mouthImage)
+        tts = TextToSpeech(this, this)
+    }
+
+    override fun onInit(status: Int) {
+        if (status == TextToSpeech.SUCCESS) {
+
+            tts.setOnUtteranceProgressListener(
+                object : UtteranceProgressListener() {
+
+                    override fun onStart(utteranceId: String?) {
+                        runOnUiThread {
+                            startLipAnimation()
+                        }
+                    }
+
+                    override fun onDone(utteranceId: String?) {
+                        runOnUiThread {
+                            stopLipAnimation()
+                        }
+                    }
+
+                    override fun onError(utteranceId: String?) {}
+                }
+            )
+
+            val params = Bundle()
+            tts.speak(
+                "Hello, how are you?",
+                TextToSpeech.QUEUE_FLUSH,
+                params,
+                "speech1"
+            )
+        }
+    }
+
+    private fun startLipAnimation() {
+        val animator = ObjectAnimator.ofFloat(
+            mouthImage,
+            "scaleY",
+            1f,
+            1.5f,
+            1f
+        )
+        animator.duration = 150
+        animator.repeatCount = ValueAnimator.INFINITE
+        animator.start()
+
+        mouthImage.tag = animator
+    }
+
+    private fun stopLipAnimation() {
+        (mouthImage.tag as? ObjectAnimator)?.cancel()
+        mouthImage.scaleY = 1f
+    }
+
+    override fun onDestroy() {
+        tts.stop()
+        tts.shutdown()
+        super.onDestroy()
+    }
+}
